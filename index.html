@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html>
+    <head lang="De-de">
+        <meta charset="UTF-8">
+        <title>Websocket test</title>
+    </head>
+    <body>
+        <div id="socket">
+            <h1>Hello</h1>
+        </div>
+    </body>
+    <script>
+        const socket = new WebSocket("ws://127.0.0.1:80")
+
+        socket.addEventListener("open", (event) => {
+            console.log(event)
+            let msg = "Hello Server!"
+            socket.send(msg);
+        })
+        socket.addEventListener("error", (event) => {
+            console.log(event);
+        })
+        socket.addEventListener("close", (event) => {
+            console.log(event);
+        })
+        socket.addEventListener("message", (event) => {
+            console.log(event)
+        })
+    </script>
+</html>
