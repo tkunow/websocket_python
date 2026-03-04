@@ -1,11 +1,9 @@
 import logging
-import socket
 import hashlib
 from base64 import b64encode
 import struct
 from enum import Enum
 import asyncio
-import time
 
 class Opcode(Enum):
     CONTINUE_FRAME = 0
@@ -33,58 +31,73 @@ class Websocket:
         await self.accept_handshake(reader, writer)
         self.connections.add(writer)
 
-        ping_task = asyncio.create_task(self._ping_frame(writer))
-
         try:
             while True:
                 msg = await self.recv_frame(reader, writer)
                 if msg is None:
-                    print("[WS] Connection closed")
+                    logging.info("Connection closed")
                     break
-                print("[WS] Received:", msg)
+                logging.info(f"Received > {msg}")
 
         finally:
-            ping_task.cancel()
-            logging.info("[WS] CLient disconnected")
+            logging.info("CLient disconnected")
 
 
     async def recv_frame(self, reader, writer) -> str:
         try:
             first_byte = await reader.readexactly(1)
-            print("first byte:", first_byte)
+            logging.info(f"first byte > {first_byte}")
 
             if not first_byte:
                 return None
 
             opcode = first_byte[0] & 0b00001111
-            print("opcode:",opcode)
+            logging.info(f"opcode > {opcode}")
             if opcode == Opcode.TEXT_FRAME.value: 
-                return await self._text_frame(reader)
+                message = await self._text_frame(reader)
+                await self.send_frame(writer, message)
+                return message
             elif opcode == Opcode.CONNECTION_CLOSE.value:
                 await self.close_handshake(reader, writer)
             elif opcode == Opcode.PONG.value:
                 await self._pong_frame(reader)
         except Exception as e:
-            print("[WS] Error:", e)
+            logging.error("Error:", e)
             return None
+
+    async def send_frame(self, writer, data: str):
+        first_byte = b'\x81'
+        lenght = len(data)
+        if lenght < 126:
+            second_byte = struct.pack('<B', 0b00000000 | lenght)
+
+        frame = first_byte + second_byte + data.encode()
+
+        logging.info(f"send frame > {frame}")
+
+        for client in self.connections:
+            if client != writer:
+                client.write(frame)
+                await client.drain()
 
     async def _text_frame(self, reader) -> str:
         second_byte = await reader.readexactly(1)
-        print("second byte:", second_byte)
+        logging.info(f"second byte > {second_byte}")
         payload_len = second_byte[0] & 0b01111111
-        print("payload len:", payload_len)
+        logging.info(f"payload len > {payload_len}")
 
         if payload_len == 126:
             payload_len = struct.unpack(">H", await reader.readexactly(2))[0]
         elif payload_len == 127:
             payload_len = struct.unpack(">Q", await reader.readexactly(8))[0]
 
-        print("payload len2:", payload_len)
+        logging.info(f"payload len2 > {payload_len}")
         mask = await reader.readexactly(4)
-        print("mask:", mask)
+        logging.info(f"mask > {mask}")
         payload = await reader.readexactly(payload_len)
-        print("payload:", payload)
+        logging.info(f"payload > {payload}")
 
+        
         decoded = bytes(
             payload[i] ^ mask[i % 4] for i in range(payload_len)
         )
@@ -93,7 +106,7 @@ class Websocket:
 
     async def _pong_frame(self, reader):
         second_byte = await reader.readexactly(1)
-        logging.info("pong_frame:", second_byte)
+        logging.info(f"pong_frame > {second_byte}")
 
     async def _ping_frame(self, writer):
         try:
@@ -105,6 +118,7 @@ class Websocket:
                 writer.write(ping_code)
                 await writer.drain()
         except asyncio.CancelledError:
+            logging.error("ping_frame error")
             pass
 
 
@@ -117,6 +131,7 @@ class Websocket:
         return None
 
     async def accept_handshake(self, reader, writer):
+        logging.info("new connection")
         data = await reader.read(1024)
         headers = data.decode().split("\r\n")
         sec_websocket_key: str
@@ -142,7 +157,7 @@ class Websocket:
     
     def close(self) -> None:
         self.sock.close()
-        logging.info("[TCP] close TCP socket")
+        logging.info("close TCP socket")
 
 
 if __name__ == "__main__":
