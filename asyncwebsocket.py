@@ -4,6 +4,7 @@ from base64 import b64encode
 import struct
 from enum import Enum
 import asyncio
+from typing import NamedTuple, Callable
 
 class Opcode(Enum):
     CONTINUE_FRAME = 0
@@ -13,37 +14,42 @@ class Opcode(Enum):
     PING = 9
     PONG = 10
 
+type Address = tuple[str, int]
+type Writer = asyncio.StreamWriter
+type Reader = asyncio.StreamReader
+class Endpoint(NamedTuple):
+    address: Address
+    writer: Writer
+    reader: Reader
+    itemid: int
+
+
 class Websocket:
-    def __init__(self, address:str = '127.0.0.1', port: int = 80):
+    def __init__(self, address: Address):
         self.address = address
-        self.port = port
         self.connections = set()
-    
-    
+        self.handler = None
+
+    def __call__(self, func):
+        self.handler = func
+
+        async def wrapper(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> Callable:
+            logging.info("call decorator")
+            await func(reader, writer)
+
+        wrapper.recv_frame = self.recv_frame
+        wrapper.send_frame = self.send_frame
+        wrapper.accept_handshake = self.accept_handshake
+        return wrapper
+
     async def start(self):
-        server = await asyncio.start_server(self.handle_connections, self.address, self.port)
+        logging.info(f"start socket: {self.address}")
+        server = await asyncio.start_server(self.handler, self.address[0], self.address[1])
 
         async with server:
             await server.serve_forever()
 
-
-    async def handle_connections(self, reader, writer):
-        await self.accept_handshake(reader, writer)
-        self.connections.add(writer)
-
-        try:
-            while True:
-                msg = await self.recv_frame(reader, writer)
-                if msg is None:
-                    logging.info("Connection closed")
-                    break
-                logging.info(f"Received > {msg}")
-
-        finally:
-            logging.info("CLient disconnected")
-
-
-    async def recv_frame(self, reader, writer) -> str:
+    async def recv_frame(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> str:
         try:
             first_byte = await reader.readexactly(1)
             logging.info(f"first byte > {first_byte}")
@@ -55,17 +61,17 @@ class Websocket:
             logging.info(f"opcode > {opcode}")
             if opcode == Opcode.TEXT_FRAME.value: 
                 message = await self._text_frame(reader)
-                await self.send_frame(writer, message)
+                # await self.send_frame(writer, message)
                 return message
             elif opcode == Opcode.CONNECTION_CLOSE.value:
-                await self.close_handshake(reader, writer)
+                await self.close_handshake(writer)
             elif opcode == Opcode.PONG.value:
-                await self._pong_frame(reader)
+                await self._pong_frame()
         except Exception as e:
             logging.error("Error:", e)
             return None
 
-    async def send_frame(self, writer, data: str):
+    async def send_frame(self, writer: asyncio.StreamWriter, data: str):
         first_byte = b'\x81'
         lenght = len(data)
         if lenght < 126:
@@ -77,10 +83,10 @@ class Websocket:
 
         for client in self.connections:
             if client != writer:
-                client.write(frame)
-                await client.drain()
+                client.writer.write(frame)
+                await client.writer.drain()
 
-    async def _text_frame(self, reader) -> str:
+    async def _text_frame(self, reader: asyncio.StreamReader) -> str:
         second_byte = await reader.readexactly(1)
         logging.info(f"second byte > {second_byte}")
         payload_len = second_byte[0] & 0b01111111
@@ -104,11 +110,11 @@ class Websocket:
 
         return decoded.decode("utf-8", errors="ignore")
 
-    async def _pong_frame(self, reader):
+    async def _pong_frame(self, reader: asyncio.StreamReader):
         second_byte = await reader.readexactly(1)
         logging.info(f"pong_frame > {second_byte}")
 
-    async def _ping_frame(self, writer):
+    async def _ping_frame(self, writer: asyncio.StreamWriter):
         try:
             while True:
                 await asyncio.sleep(10)
@@ -122,7 +128,7 @@ class Websocket:
             pass
 
 
-    async def close_handshake(self, reader, writer):
+    async def close_handshake(self, writer: asyncio.StreamWriter):
 
         self.connections.remove(writer)
         writer.close()
@@ -130,8 +136,9 @@ class Websocket:
 
         return None
 
-    async def accept_handshake(self, reader, writer):
-        logging.info("new connection")
+    async def accept_handshake(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
+        logging.info(f"new connection from > {writer.get_extra_info('peername')}")
+
         data = await reader.read(1024)
         headers = data.decode().split("\r\n")
         sec_websocket_key: str
@@ -154,13 +161,9 @@ class Websocket:
 
         writer.write(response.encode())
         await writer.drain()
+
+        self.connections.add(Endpoint(writer.get_extra_info('peername'), writer, reader, 99))
     
     def close(self) -> None:
         self.sock.close()
         logging.info("close TCP socket")
-
-
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-
-    asyncio.run(Websocket().start())
