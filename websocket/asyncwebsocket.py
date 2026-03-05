@@ -43,7 +43,7 @@ class Websocket:
         return wrapper
 
     async def start(self):
-        logging.info(f"start socket: {self.address}")
+        logging.info("start socket: %s", self.address)
         server = await asyncio.start_server(self.handler, self.address[0], self.address[1])
 
         async with server:
@@ -52,13 +52,13 @@ class Websocket:
     async def recv_frame(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> str:
         try:
             first_byte = await reader.readexactly(1)
-            logging.info(f"first byte > {first_byte}")
+            logging.info("first byte > %s", first_byte)
 
             if not first_byte:
                 return None
 
             opcode = first_byte[0] & 0b00001111
-            logging.info(f"opcode > {opcode}")
+            logging.info("opcode > %s", opcode)
             if opcode == Opcode.TEXT_FRAME.value: 
                 message = await self._text_frame(reader)
                 # await self.send_frame(writer, message)
@@ -66,9 +66,9 @@ class Websocket:
             elif opcode == Opcode.CONNECTION_CLOSE.value:
                 await self.close_handshake(writer)
             elif opcode == Opcode.PONG.value:
-                await self._pong_frame()
+                await self._pong_frame(reader)
         except Exception as e:
-            logging.error("Error:", e)
+            logging.error("Error: %s", e)
             return None
 
     async def send_frame(self, writer: asyncio.StreamWriter, data: str):
@@ -76,10 +76,13 @@ class Websocket:
         lenght = len(data)
         if lenght < 126:
             second_byte = struct.pack('<B', 0b00000000 | lenght)
+        else:
+            logging.info("cancel send, payload length > 125")
+            return
 
         frame = first_byte + second_byte + data.encode()
 
-        logging.info(f"send frame > {frame}")
+        logging.info("send frame > %s", frame)
 
         for client in self.connections:
             if client != writer:
@@ -88,20 +91,20 @@ class Websocket:
 
     async def _text_frame(self, reader: asyncio.StreamReader) -> str:
         second_byte = await reader.readexactly(1)
-        logging.info(f"second byte > {second_byte}")
+        logging.info("second byte > %s", second_byte)
         payload_len = second_byte[0] & 0b01111111
-        logging.info(f"payload len > {payload_len}")
+        logging.info("payload len > %s", payload_len)
 
         if payload_len == 126:
             payload_len = struct.unpack(">H", await reader.readexactly(2))[0]
         elif payload_len == 127:
             payload_len = struct.unpack(">Q", await reader.readexactly(8))[0]
 
-        logging.info(f"payload len2 > {payload_len}")
+        logging.info("payload len2 > %s", payload_len)
         mask = await reader.readexactly(4)
-        logging.info(f"mask > {mask}")
+        logging.info("mask > %s", mask)
         payload = await reader.readexactly(payload_len)
-        logging.info(f"payload > {payload}")
+        logging.info("payload > %s", payload)
 
         
         decoded = bytes(
@@ -112,7 +115,7 @@ class Websocket:
 
     async def _pong_frame(self, reader: asyncio.StreamReader):
         second_byte = await reader.readexactly(1)
-        logging.info(f"pong_frame > {second_byte}")
+        logging.info("pong_frame > %s", second_byte)
 
     async def _ping_frame(self, writer: asyncio.StreamWriter):
         try:
@@ -125,8 +128,6 @@ class Websocket:
                 await writer.drain()
         except asyncio.CancelledError:
             logging.error("ping_frame error")
-            pass
-
 
     async def close_handshake(self, writer: asyncio.StreamWriter):
 
@@ -137,7 +138,7 @@ class Websocket:
         return None
 
     async def accept_handshake(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
-        logging.info(f"new connection from > {writer.get_extra_info('peername')}")
+        logging.info("new connection from > %s", writer.get_extra_info('peername'))
 
         data = await reader.read(1024)
         headers = data.decode().split("\r\n")
@@ -163,7 +164,3 @@ class Websocket:
         await writer.drain()
 
         self.connections.add(Endpoint(writer.get_extra_info('peername'), writer, reader, 99))
-    
-    def close(self) -> None:
-        self.sock.close()
-        logging.info("close TCP socket")
