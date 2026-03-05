@@ -1,7 +1,7 @@
 # Websocket
 
 ## Description
-This is a learning project to better understand how websocket work. The websocket is writen in pure python without any third party dependencies. It is not the projects intention to provide a feature complete websocket implementation.
+This is a learning project to better understand how the websocket protocol works. The websocket is writen in pure python without any third party dependencies. It is not the projects intention to provide a feature complete websocket implementation.
 
 ## Capabilities
 * accept handshake to establish a connection
